@@ -943,7 +943,7 @@ void iecFuji::copy_file(std::string source, std::string destination)
     // If destination is a directory then save with source filename
     if ( out_file->isDirectory() )
     {
-        destination += "/" + in_file->name;
+        destination += '/'; destination += in_file->name;
         out_file.reset(MFSOwner::File(destination));
     }
 

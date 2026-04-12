@@ -53,35 +53,40 @@
 // To be safe, BUFFER_SIZE should always be >=256
 #define BUFFER_SIZE 512
 
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
+
 
 #if 1
 static const char *getCStringLog(std::string s)
 {
-  size_t i, len = s.length();
-  for(i=0; i<len && isprint(s[i]); i++);
+    size_t i, len = s.length();
+    for(i=0; i<len && isprint(s[i]); i++);
 
-  if( i==len )
-    return s.c_str();
-  else
-    {
-      static const char* digits = "0123456789ABCDEF";
-      static std::string ss;
-      ss.clear();
-      for(i=0; i<len; i++)
+    if( i==len )
+        return s.c_str();
+    else
         {
-          if( isprint(s[i]) ) 
-            ss += s[i];
-          else
+        static const char* digits = "0123456789ABCDEF";
+        static std::string ss;
+        ss.clear();
+        for(i=0; i<len; i++)
             {
-              uint8_t d = (uint8_t) s[i];
-              ss += "[";
-              ss += digits[d/16];
-              ss += digits[d&15];
-              ss += "]";
+            if( isprint(s[i]) ) 
+                ss += s[i];
+            else
+                {
+                uint8_t d = (uint8_t) s[i];
+                ss += "[";
+                ss += digits[d/16];
+                ss += digits[d&15];
+                ss += "]";
+                }
             }
-        }
-      
-      return ss.c_str();
+        
+        return ss.c_str();
     }
 }
 #else
@@ -113,7 +118,7 @@ static bool isMatch(std::string name, std::string pattern)
 iecChannelHandler::iecChannelHandler(iecDrive *drive)
 { 
     m_drive = drive;
-    m_data = new uint8_t[BUFFER_SIZE];
+    m_data = (uint8_t*)psram_malloc(BUFFER_SIZE);
     m_len = 0;
     m_ptr = 0;
 }
@@ -121,7 +126,7 @@ iecChannelHandler::iecChannelHandler(iecDrive *drive)
 
 iecChannelHandler::~iecChannelHandler()
 { 
-    delete [] m_data; 
+    free(m_data);
 }
 
 
@@ -394,11 +399,12 @@ iecChannelHandlerDir::~iecChannelHandlerDir()
 
 void iecChannelHandlerDir::addExtraInfo(std::string title, std::string text)
 {
-    m_headers.push_back("NFO ["+title+"]");
+    { std::string h; h.reserve(6 + title.size()); h = "NFO ["; h += title; h += ']'; m_headers.push_back(h); }
     while( text.size()>0 )
     {
         std::string s = text.substr(0, 16);
-        m_headers.push_back("NFO "+s);
+        std::string h; h.reserve(4 + s.size()); h = "NFO "; h += s;
+        m_headers.push_back(h);
         text.erase(0, s.size());
     }
 }
@@ -888,8 +894,9 @@ bool iecDrive::open(uint8_t channel, const char *cname, uint8_t nameLen)
                     {
                         // VDrive needs full path including pathInStream
                         std::string full_path = f->url;
-                        if ( f->pathInStream.size() )
-                            full_path += "/" + f->pathInStream;
+                        if ( f->pathInStream.size() ) {
+                            full_path += '/'; full_path += f->pathInStream;
+                        }
 
                         //Debug_printv( ANSI_RED_BOLD_HIGH_INTENSITY "VDrive Opening file [%s] mode[%s]", full_path.c_str(), mode==std::ios_base::in ? "read" : "write");
                         if( Meatloaf.use_vdrive && !is_dir && (m_vdrive=VDrive::create(m_devnr-8, full_path.c_str()))!=nullptr )
@@ -2112,8 +2119,9 @@ void iecDrive::set_cwd(std::string path, bool verified)
             // ZIP), n->url is the container URL and n->pathInStream is the entry path.
             // VDrive uses MFSOwner::File() internally, so the combined URL resolves correctly.
             std::string vdrive_url = n->url;
-            if (!n->pathInStream.empty())
-                vdrive_url += "/" + n->pathInStream;
+            if (!n->pathInStream.empty()) {
+                vdrive_url += '/'; vdrive_url += n->pathInStream;
+            }
 
             if( n->exists() && !isDirectory && haveStream &&
                 (m_vdrive=VDrive::create(m_devnr-8, vdrive_url.c_str()))!=nullptr )
