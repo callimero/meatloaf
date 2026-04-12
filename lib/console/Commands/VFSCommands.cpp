@@ -9,6 +9,12 @@
 #include <sys/types.h>
 #include <sys/syslimits.h>
 #include <iostream>
+#include <esp_heap_caps.h>
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 #include "fsFlash.h"
 #include "fnConfig.h"
@@ -319,9 +325,11 @@ int rm(int argc, char **argv)
         while ((d = readdir(dir)) != NULL)
         {
             std::string pattern = filename;
-            std::string match_file = path;
+            std::string match_file;
+            match_file.reserve(strlen(path) + 1 + strlen(d->d_name));
+            match_file = path;
             if (strlen(path) > 1)
-                match_file += "/";
+                match_file += '/';
             match_file += d->d_name;
             Debug_printv("pattern[%s] match_file[%s]", pattern.c_str(), match_file.c_str());
             if ( mstr::compare(match_file, pattern, false) )
@@ -411,7 +419,10 @@ int mount(int argc, char **argv)
     // Device ID
     int did = atoi(argv[1]) - 8;
 
-    std::string filename = "^" + getCurrentPath()->url;
+    std::string filename;
+    filename.reserve(getCurrentPath()->url.size() + 1);
+    filename = '^';
+    filename += getCurrentPath()->url;
     if ( argc > 2 )
     {
         // Use current path + filename
@@ -421,7 +432,7 @@ int mount(int argc, char **argv)
         }
         else
         {
-            filename += "/";
+            filename += '/';
             filename += argv[2];
         }
     }
@@ -456,8 +467,11 @@ int wget(int argc, char **argv)
     {
         auto s = f->getSourceStream();
 
-        std::string outfile = pwd;
-        outfile += "/" + f->name;
+        std::string outfile;
+        outfile.reserve(pwd.size() + 1 + f->name.size());
+        outfile = pwd;
+        outfile += '/';
+        outfile += f->name;
 
         Debug_printv("size[%lu] name[%s] url[%s] outfile[%s]", f->size, f->name.c_str(), s->url.c_str(), outfile.c_str());
 
@@ -471,7 +485,7 @@ int wget(int argc, char **argv)
 
         // Receive File
         int count = 0;
-        uint8_t bytes[256];
+        uint8_t *bytes = (uint8_t *)psram_malloc(256);
         while (true)
         {
             int bytes_read = s->read(bytes, 256);
@@ -497,6 +511,7 @@ int wget(int argc, char **argv)
             Serial.printf("Downloading '%s' %d%% [%lu]\r", f->name.c_str(), percent, s->position());
             count++;
         }
+        free(bytes);
         fclose(file);
         Serial.printf("\n");
         //delete f;

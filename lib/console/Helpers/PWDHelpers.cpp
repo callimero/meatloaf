@@ -44,7 +44,10 @@ namespace ESP32Console
         // If path is not absolute we prepend our pwd
         if (!mstr::startsWith(in, "/"))
         {
-            result = pwd + "/" + in;
+            result.reserve(pwd.size() + 1 + in.size());
+            result = pwd;
+            result += '/';
+            result += in;
         }
         else
         {

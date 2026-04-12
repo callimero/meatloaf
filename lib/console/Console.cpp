@@ -357,7 +357,13 @@ namespace ESP32Console
             /* Try to run the command */
             int ret;
 #ifdef ENABLE_CONSOLE_TCP
-            tcp_server.send(interpolated_line + "\n");
+            {
+                std::string _tcp_line;
+                _tcp_line.reserve(interpolated_line.size() + 1);
+                _tcp_line = interpolated_line;
+                _tcp_line += '\n';
+                tcp_server.send(_tcp_line);
+            }
 #endif
             esp_err_t err = esp_console_run(interpolated_line.c_str(), &ret);
 
@@ -366,11 +372,10 @@ namespace ESP32Console
 
             if (err == ESP_ERR_NOT_FOUND)
             {
-                std::string t = "Unrecognized command\n";
 #ifdef ENABLE_CONSOLE_TCP
-                tcp_server.send(t);
+                tcp_server.send("Unrecognized command\n");
 #endif
-                fprintf(stdout, t.c_str());
+                fprintf(stdout, "Unrecognized command\n");
             }
             else if (err == ESP_ERR_INVALID_ARG)
             {
@@ -416,8 +421,7 @@ namespace ESP32Console
 
         if (err == ESP_ERR_NOT_FOUND)
         {
-            std::string t = "Unrecognized command\n";
-            printf(t.c_str());
+            printf("Unrecognized command\n");
         }
         else if (err == ESP_ERR_INVALID_ARG)
         {

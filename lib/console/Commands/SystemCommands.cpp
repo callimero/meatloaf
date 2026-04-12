@@ -1,6 +1,12 @@
 #include "SystemCommands.h"
 
 #include <cstring>
+#include <esp_heap_caps.h>
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 #include <freertos/task.h>
 #include <esp_partition.h>
@@ -32,6 +38,7 @@ static std::string mac2String(uint64_t mac)
 {
     uint8_t *ar = (uint8_t *)&mac;
     std::string s;
+    s.reserve(17); // 6 hex pairs + 5 colons
     for (uint8_t i = 0; i < 6; ++i)
     {
         char buf[3];
@@ -181,9 +188,12 @@ static int meminfo(int argc, char **argv)
 static int taskinfo(int argc, char **argv)
 {
     Serial.printf("Task Name\tStatus\tPrio\tHWM\tTask\tAffinity\r\n");
-    char stats_buffer[1024];
-    vTaskList(stats_buffer);
-    Serial.printf("%s\r\n", stats_buffer);
+    char *stats_buffer = (char *)psram_malloc(1024);
+    if (stats_buffer) {
+        vTaskList(stats_buffer);
+        Serial.printf("%s\r\n", stats_buffer);
+        free(stats_buffer);
+    }
     return EXIT_SUCCESS;
 }
 

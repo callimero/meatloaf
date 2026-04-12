@@ -13,6 +13,12 @@
 #include <sstream>
 #include <sys/fcntl.h>
 #include <driver/uart.h>
+#include <esp_heap_caps.h>
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 #include "string_utils.h"
 
@@ -131,7 +137,7 @@ int tx(int argc, char **argv)
     int size = file_stat.st_size;
 
     // Receive File
-    uint8_t buffer[256];
+    uint8_t *buffer = (uint8_t *)psram_malloc(256);
     int bytesRead = 0;
 
     // Calculate checksum
@@ -139,6 +145,7 @@ int tx(int argc, char **argv)
     FILE *file = fopen(filename, "r");
     if (file == nullptr)
     {
+        free(buffer);
         Serial.printf("2 Error: Can't open file!\r\n");
         return 2;
     }
@@ -164,6 +171,7 @@ int tx(int argc, char **argv)
         }
     }
     fclose(file);
+    free(buffer);
 
     // End file data with CRLF
     Serial.printf("\r\n");
