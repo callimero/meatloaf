@@ -655,58 +655,106 @@ void cHttpdServer::send_file(httpd_req_t *req, const char *filename)
     }
 }
 
-// Send file content after parsing for replaceable strings
+// Send file content after parsing for replaceable strings.
+// Streams in http_SEND_BUFF_SIZE chunks to avoid loading the entire file into RAM.
+// Handles {{ tag }} substitution even when a tag spans a chunk boundary.
 void cHttpdServer::send_file_parsed(httpd_req_t *req, const char *filename)
 {
-    // Note that we don't add FNWS_FILE_ROOT as it should've been done in send_file()
-
-    int err = 200;
-
     Debug_printv("filename[%s]", filename);
 
-    // Retrieve server state
     serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
     FILE *file = pState->_FS->file_open(filename);
 
     if (file == nullptr)
     {
         Debug_printv("Failed to open file for parsing: [%s]", filename);
-        err = 404;
-    }
-    else
-    {
-        // Set the response content type
-        set_file_content_type(req, filename);
-
-        // We're going to load the whole thing into memory, so watch out for big files!
-        size_t sz = FileSystem::filesize(file) + 1;
-        char *buf = (char *)calloc(sz, 1);
-        if (buf == NULL)
-        {
-            Debug_printf("Couldn't allocate %u bytes to load file contents!\r\n", sz);
-            err = 500;
-        }
-        else
-        {
-            fread(buf, 1, sz, file);
-            std::string contents(buf);
-            free(buf);
-            contents = parse_contents(contents);
-
-            httpd_resp_send(req, contents.c_str(), contents.length());
-        }
-        fclose(file);
-    }
-
-    if (err != 200)
-    {
-        // Do NOT call send_http_error() here — error pages are HTML and would
-        // recurse back through send_file_parsed() → send_http_error() → ...
+        // Do NOT call send_http_error() — error pages route through send_file_parsed() too
         httpd_resp_set_type(req, "text/plain");
         char msg[16];
-        snprintf(msg, sizeof(msg), "Error %d", err);
+        snprintf(msg, sizeof(msg), "Error %d", 404);
         httpd_resp_send(req, msg, strlen(msg));
+        return;
     }
+
+    set_file_content_type(req, filename);
+
+    // `pending` holds bytes that haven't been sent yet — at most one read buffer's
+    // worth plus the length of any tag that crosses a chunk boundary (typically < 50 bytes).
+    std::string pending;
+    char buf[http_SEND_BUFF_SIZE];
+    bool done = false;
+
+    while (!done)
+    {
+        size_t count = fread(buf, 1, sizeof(buf), file);
+        if (count > 0)
+            pending.append(buf, count);
+        else
+            done = true;
+
+        size_t pos = 0;
+        while (true)
+        {
+            size_t open = pending.find("{{", pos);
+
+            if (open == std::string::npos)
+            {
+                if (done)
+                {
+                    // EOF — flush everything remaining
+                    if (pos < pending.size())
+                        httpd_resp_send_chunk(req, pending.c_str() + pos, pending.size() - pos);
+                    pos = pending.size();
+                }
+                else
+                {
+                    // Keep the last character: it could be the leading '{' of '{{'
+                    size_t safe_end = pending.size() > 0 ? pending.size() - 1 : 0;
+                    if (safe_end > pos)
+                    {
+                        httpd_resp_send_chunk(req, pending.c_str() + pos, safe_end - pos);
+                        pos = safe_end;
+                    }
+                }
+                break;
+            }
+
+            // Found '{{' — look for closing '}}'
+            size_t close = pending.find("}}", open + 2);
+
+            if (close == std::string::npos)
+            {
+                // Closing tag not yet in buffer; send pre-tag text and wait for more data
+                if (open > pos)
+                    httpd_resp_send_chunk(req, pending.c_str() + pos, open - pos);
+                pos = open;
+
+                if (done)
+                {
+                    // Unclosed tag at EOF — emit as literal
+                    httpd_resp_send_chunk(req, pending.c_str() + pos, pending.size() - pos);
+                    pos = pending.size();
+                }
+                break;
+            }
+
+            // Complete {{ tag }} found — send pre-tag text then substitution
+            if (open > pos)
+                httpd_resp_send_chunk(req, pending.c_str() + pos, open - pos);
+
+            std::string tag = pending.substr(open + 2, close - open - 2);
+            std::string substitution = substitute_tag(tag);
+            if (!substitution.empty())
+                httpd_resp_send_chunk(req, substitution.c_str(), substitution.size());
+
+            pos = close + 2;
+        }
+
+        pending.erase(0, pos);
+    }
+
+    httpd_resp_send_chunk(req, nullptr, 0); // terminate chunked response
+    fclose(file);
 }
 
 // Send some meaningful(?) error message to client.
