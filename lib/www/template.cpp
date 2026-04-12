@@ -99,7 +99,10 @@ const std::string substitute_tag(const std::string &tag)
 {
     enum tagids
     {
-        DEVICE_HOSTNAME = 0,
+        DOCUMENT_ROOT = 0,
+        REQUEST_URI,
+
+        DEVICE_HOSTNAME,
         DEVICE_VERSION,
         DEVICE_IPADDRESS,
         DEVICE_IPMASK,
@@ -185,6 +188,8 @@ const std::string substitute_tag(const std::string &tag)
 
     const char *tagids[DEVICE_LASTTAG] =
     {
+        "DOCUMENT_ROOT",
+        "REQUEST_URI",
         "DEVICE_HOSTNAME",
         "DEVICE_VERSION",
         "DEVICE_IPADDRESS",
@@ -289,6 +294,12 @@ const std::string substitute_tag(const std::string &tag)
     // Provide a replacement value
     switch (tagid)
     {
+    // case DOCUMENT_ROOT:
+    //     resultstream << oHTTP.get_document_root();
+    //     break;
+    // case REQUEST_URI:
+    //     resultstream << oHTTP.get_request_uri();
+    //     break;
     case DEVICE_HOSTNAME:
         resultstream << fnSystem.Net.get_hostname();
         break;

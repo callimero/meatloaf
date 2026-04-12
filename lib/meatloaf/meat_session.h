@@ -273,7 +273,7 @@ private:
 
     // FreeRTOS task function
     static void session_service_task(void* arg) {
-        Debug_printv("SessionBroker task started on core %d", xPortGetCoreID());
+        //Debug_printv("SessionBroker task started on core %d", xPortGetCoreID());
         while (task_running) {
             service();
             vTaskDelay(pdMS_TO_TICKS(1000)); // Check every 1 second
@@ -305,7 +305,7 @@ public:
         }
 
         task_running = true;
-        Debug_printv("Starting SessionBroker service task");
+        //Debug_printv("Starting SessionBroker service task");
 
         // Create task on CPU0 (same core as WiFi)
         // Lower priority than IEC bus task

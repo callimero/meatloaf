@@ -24,6 +24,10 @@
 
 #include "string_utils.h"
 
+#ifdef ENABLE_CONSOLE
+#include "../lib/console/ESP32Console.h"
+#endif
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_system.h>
@@ -61,12 +65,45 @@
 
 cHttpdServer oHttpdServer;
 
-std::string httpdocs;
+// Static member definitions (required by C++ ODR — declarations in the header are not enough)
+std::string cHttpdServer::httpdocs;
+std::string cHttpdServer::uri;
+std::string cHttpdServer::queryString;
+httpd_handle_t cHttpdServer::s_server = nullptr;
+
 
 struct async_resp_arg {
     httpd_handle_t hd;
     int fd;
 };
+
+struct broadcast_arg {
+    httpd_handle_t hd;
+    uint8_t* data;
+    size_t len;
+};
+
+static void websocket_broadcast_send(void *arg)
+{
+    broadcast_arg *b = (broadcast_arg*)arg;
+    size_t max_clients = 8; // matches config.max_open_sockets in start_server()
+    int client_fds[8];
+
+    if (httpd_get_client_list(b->hd, &max_clients, client_fds) == ESP_OK) {
+        for (size_t i = 0; i < max_clients; i++) {
+            if (httpd_ws_get_fd_info(b->hd, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+                httpd_ws_frame_t ws_pkt = {};
+                ws_pkt.payload = b->data;
+                ws_pkt.len = b->len;
+                ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+                httpd_ws_send_frame_async(b->hd, client_fds[i], &ws_pkt);
+            }
+        }
+    }
+
+    free(b->data);
+    free(b);
+}
 
 long file_size(FILE *fd)
 {
@@ -83,72 +120,21 @@ bool exists(std::string path)
     return (i == 0);
 }
 
-// static bool should_trace_webdav_method(http_method method)
-// {
-//     switch (method)
-//     {
-//     case HTTP_OPTIONS:
-//     case HTTP_PROPFIND:
-//     case HTTP_PROPPATCH:
-//     case HTTP_LOCK:
-//     case HTTP_UNLOCK:
-//     case HTTP_PUT:
-//     case HTTP_MKCOL:
-//     case HTTP_MOVE:
-//     case HTTP_COPY:
-//     case HTTP_DELETE:
-//         return true;
-//     default:
-//         return false;
-//     }
-// }
-
-// static void trace_webdav_header(WebDav::Request &req, const char *name)
-// {
-//     std::string value = req.getHeader(name);
-//     if (!value.empty())
-//         Debug_printv("dav.hdr %s: %s", name, value.c_str());
-// }
-
-// static void trace_webdav_request(httpd_req_t *httpd_req, WebDav::Request &req)
-// {
-//     if (!should_trace_webdav_method((http_method)httpd_req->method))
-//         return;
-
-//     Debug_printv("dav.trace method[%s] uri[%s] len[%d]", http_method_str((enum http_method)httpd_req->method), httpd_req->uri, httpd_req->content_len);
-
-//     trace_webdav_header(req, "Host");
-//     trace_webdav_header(req, "User-Agent");
-//     trace_webdav_header(req, "Depth");
-//     trace_webdav_header(req, "Destination");
-//     trace_webdav_header(req, "Overwrite");
-//     trace_webdav_header(req, "Translate");
-//     trace_webdav_header(req, "If");
-//     trace_webdav_header(req, "Lock-Token");
-//     trace_webdav_header(req, "Timeout");
-//     trace_webdav_header(req, "Expect");
-//     trace_webdav_header(req, "Content-Type");
-//     trace_webdav_header(req, "Content-Length");
-
-//     std::string authorization = req.getHeader("Authorization");
-//     if (!authorization.empty())
-//         Debug_printv("dav.hdr Authorization: <present>");
-// }
-
 /* Our URI handler function to be called during GET /uri request */
 esp_err_t cHttpdServer::get_handler(httpd_req_t *httpd_req)
 {
     //Debug_printv("uri[%s]", httpd_req->uri);
 
 
-    std::string uri = mstr::urlDecode(httpd_req->uri);
-    if (uri == "/")
-    {
-        uri = "/index.html";
-    }
+    uri = mstr::urlDecode(httpd_req->uri);
+    // if (uri == "/")
+    // {
+    //     uri = "/index.html";
+    // }
     //Debug_printv("uri[%s]", uri.c_str());
 
     // Remove query string from uri
+    queryString = uri.substr(uri.find("?") + 1);
     uri = uri.substr(0, uri.find("?"));
 
     // // Ignore OSX/WIN junk files
@@ -218,7 +204,7 @@ esp_err_t cHttpdServer::websocket_handler(httpd_req_t *req)
         Debug_printv("httpd_ws_recv_frame failed to get frame len with %d", ret);
         return ret;
     }
-    Debug_printv("frame len is %d", ws_pkt.len);
+    //Debug_printv("frame len is %d", ws_pkt.len);
     if (ws_pkt.len) {
         /* ws_pkt.len + 1 is for NULL termination as we are expecting a string */
         buf = (uint8_t *)calloc(1, ws_pkt.len + 1);
@@ -234,55 +220,53 @@ esp_err_t cHttpdServer::websocket_handler(httpd_req_t *req)
             free(buf);
             return ret;
         }
-        Debug_printv("Got packet with message: %s", ws_pkt.payload);
+        //Debug_printv("Got packet with message: %s", ws_pkt.payload);
+#ifdef ENABLE_CONSOLE
+        console.execute((char*)ws_pkt.payload);
+#endif
 
-        Debug_printv("Packet type: %d", ws_pkt.type);
-
-        if (ws_pkt.type == HTTPD_WS_TYPE_TEXT &&
-            strcmp((char*)ws_pkt.payload,"Trigger async") == 0) {
-            free(buf);
-            return websocket_trigger_async_send(req->handle, req);
-        }
+        std::string msg = "Wassup Mainiac! echo[" + std::string((char*)ws_pkt.payload) + "]";
+        websocket_send_all(msg.c_str(), msg.length());
     }
 
-    ret = httpd_ws_send_frame(req, &ws_pkt);
-    if (ret != ESP_OK) {
-        Debug_printv("httpd_ws_send_frame failed with %d", ret);
-    }
+    // ret = httpd_ws_send_frame(req, &ws_pkt);
+    // if (ret != ESP_OK) {
+    //     Debug_printv("httpd_ws_send_frame failed with %d", ret);
+    // }
     free(buf);
-    return ret;
+    return ESP_OK;
 }
 
-esp_err_t cHttpdServer::websocket_trigger_async_send(httpd_handle_t handle, httpd_req_t *req)
-{
-    struct async_resp_arg *resp_arg = (async_resp_arg *)malloc(sizeof(struct async_resp_arg));
-    if (resp_arg == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-    resp_arg->hd = req->handle;
-    resp_arg->fd = httpd_req_to_sockfd(req);
-    esp_err_t ret = httpd_queue_work(handle, websocket_async_send, resp_arg);
-    if (ret != ESP_OK) {
-        free(resp_arg);
-    }
-    return ret;
-}
+// esp_err_t cHttpdServer::websocket_trigger_async_send(httpd_handle_t handle, httpd_req_t *req)
+// {
+//     struct async_resp_arg *resp_arg = (async_resp_arg *)malloc(sizeof(struct async_resp_arg));
+//     if (resp_arg == NULL) {
+//         return ESP_ERR_NO_MEM;
+//     }
+//     resp_arg->hd = req->handle;
+//     resp_arg->fd = httpd_req_to_sockfd(req);
+//     esp_err_t ret = httpd_queue_work(handle, websocket_async_send, resp_arg);
+//     if (ret != ESP_OK) {
+//         free(resp_arg);
+//     }
+//     return ret;
+// }
 
-void cHttpdServer::websocket_async_send(void *arg)
-{
-    static const char * data = "Async data";
-    struct async_resp_arg *resp_arg = (async_resp_arg *)arg;
-    httpd_handle_t hd = resp_arg->hd;
-    int fd = resp_arg->fd;
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    ws_pkt.payload = (uint8_t*)data;
-    ws_pkt.len = strlen(data);
-    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+// void cHttpdServer::websocket_async_send(void *arg)
+// {
+//     static const char * data = "Async data from MEATLOAF!";
+//     struct async_resp_arg *resp_arg = (async_resp_arg *)arg;
+//     httpd_handle_t hd = resp_arg->hd;
+//     int fd = resp_arg->fd;
+//     httpd_ws_frame_t ws_pkt;
+//     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+//     ws_pkt.payload = (uint8_t*)data;
+//     ws_pkt.len = strlen(data);
+//     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
 
-    httpd_ws_send_frame_async(hd, fd, &ws_pkt);
-    free(resp_arg);
-}
+//     httpd_ws_send_frame_async(hd, fd, &ws_pkt);
+//     free(resp_arg);
+// }
 
 esp_err_t cHttpdServer::webdav_handler(httpd_req_t *httpd_req)
 {
@@ -292,16 +276,6 @@ esp_err_t cHttpdServer::webdav_handler(httpd_req_t *httpd_req)
     int ret;
 
     //Debug_printv("url[%s]", httpd_req->uri);
-
-    // // Ignore OSX/WIN junk files
-    // std::string uri = httpd_req->uri;
-    // if ( mstr::isJunk(uri) )
-    // {
-    //     resp.setStatus(404); // Not Found
-    //     resp.flushHeaders();
-    //     resp.closeBody();
-    //     return ESP_OK;
-    // }
 
     if ( !req.parseRequest() )
     {
@@ -406,14 +380,16 @@ void cHttpdServer::webdav_register(httpd_handle_t server, const char *root_uri, 
 {
     WebDav::Server *webDavServer = new WebDav::Server(root_uri, root_path);
 
-    char *uri;
-    if ( strlen(root_uri ) > 1 )
-        asprintf(&uri, "%s/?*", root_uri);
+    // Use a static string so the pointer remains valid for the lifetime of the server.
+    // asprintf() here was a leak: ESP-IDF stores the URI pointer without copying it.
+    static std::string dav_uri_pattern;
+    if (strlen(root_uri) > 1)
+        dav_uri_pattern = std::string(root_uri) + "/?*";
     else
-        asprintf(&uri, "/?*");
+        dav_uri_pattern = "/?*";
 
     httpd_uri_t uri_dav = {
-        .uri = uri,
+        .uri = dav_uri_pattern.c_str(),
         .method = http_method(0),
         .handler = webdav_handler,
         .user_ctx = webDavServer,
@@ -527,6 +503,7 @@ httpd_handle_t cHttpdServer::start_server(serverstate &state)
         httpd_register_uri_handler(state.hServer, &uri_get);
         httpd_register_uri_handler(state.hServer, &uri_post);
 
+        s_server = state.hServer;
         printf(ANSI_GREEN_BOLD "WWW/WS/WebDAV Server Started!" ANSI_RESET "\r\n");
     }
     else
@@ -629,12 +606,22 @@ void cHttpdServer::send_file(httpd_req_t *req, const char *filename)
         fpath = filename;
     }
 
+    // Retrieve server state
+    serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
+
+    Debug_printv("is_dir[%d] fpath[%s]", pState->_FS->is_dir(fpath.c_str()), fpath.c_str());
+
+    // If filename is a directory, look for index.html within it
+    if (fpath.back() == '/')
+        fpath += "index.html";
+    else if (pState->_FS->is_dir(fpath.c_str()))
+        fpath += "/index.html";
+
     // Handle file differently if it's one of the types we parse
     if (is_parsable(get_extension(filename)))
         return send_file_parsed(req, fpath.c_str());
 
-    // Retrieve server state
-    serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
+    // Open the file
     FILE *file = pState->_FS->file_open(fpath.c_str());
 
     //Debug_printv("filename[%s]", filename);
@@ -655,6 +642,12 @@ void cHttpdServer::send_file(httpd_req_t *req, const char *filename)
 
         // Send the file content out in chunks
         char *buf = (char *)malloc(http_SEND_BUFF_SIZE);
+        if (buf == nullptr)
+        {
+            fclose(file);
+            send_http_error(req, 500);
+            return;
+        }
         size_t count = 0;
         do
         {
@@ -673,7 +666,7 @@ void cHttpdServer::send_file_parsed(httpd_req_t *req, const char *filename)
 
     int err = 200;
 
-    //Debug_printv("filename[%s]", filename);
+    Debug_printv("filename[%s]", filename);
 
     // Retrieve server state
     serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
@@ -710,20 +703,71 @@ void cHttpdServer::send_file_parsed(httpd_req_t *req, const char *filename)
     }
 
     if (err != 200)
-        send_http_error(req, err);
+    {
+        // Do NOT call send_http_error() here — error pages are HTML and would
+        // recurse back through send_file_parsed() → send_http_error() → ...
+        httpd_resp_set_type(req, "text/plain");
+        char msg[16];
+        snprintf(msg, sizeof(msg), "Error %d", err);
+        httpd_resp_send(req, msg, strlen(msg));
+    }
 }
 
-// Send some meaningful(?) error message to client
+// Send some meaningful(?) error message to client.
+// NOTE: Must NOT call send_file() or send_file_parsed() — those call back into
+// send_http_error() and create infinite recursion when the SD card is OOM.
 void cHttpdServer::send_http_error(httpd_req_t *req, int errnum)
 {
-    std::ostringstream error_page;
+    std::string error_path = httpdocs + "error/" + std::to_string(errnum) + ".html";
+    Debug_printv("Error %d, looking for error page [%s]", errnum, error_path.c_str());
 
-    error_page << httpdocs << "error/" << errnum << ".html";
+    serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
+    FILE *file = pState->_FS->file_open(error_path.c_str());
 
-    if ( exists(error_page.str()) )
-        send_file(req, error_page.str().c_str());
+    if (file != nullptr)
+    {
+        set_file_content_type(req, error_path.c_str());
+        char *buf = (char *)malloc(http_SEND_BUFF_SIZE);
+        if (buf != nullptr)
+        {
+            size_t count = 0;
+            do {
+                count = fread(buf, 1, http_SEND_BUFF_SIZE, file);
+                httpd_resp_send_chunk(req, buf, count);
+            } while (count > 0);
+            free(buf);
+        }
+        fclose(file);
+    }
     else
-        httpd_resp_send(req, NULL, 0);
+    {
+        // Fallback: plain text — no further recursion possible
+        httpd_resp_set_type(req, "text/plain");
+        char msg[16];
+        snprintf(msg, sizeof(msg), "Error %d", errnum);
+        httpd_resp_send(req, msg, strlen(msg));
+    }
+}
+
+void cHttpdServer::websocket_send_all(const char* data, size_t len)
+{
+    //Debug_printv("Broadcasting message to all websocket clients: [%s]", data);
+    if (!s_server || !data || len == 0) return;
+
+    broadcast_arg *b = (broadcast_arg*)malloc(sizeof(broadcast_arg));
+    if (!b) return;
+
+    b->hd   = s_server;
+    b->data = (uint8_t*)malloc(len);
+    if (!b->data) { free(b); return; }
+
+    memcpy(b->data, data, len);
+    b->len = len;
+
+    if (httpd_queue_work(s_server, websocket_broadcast_send, b) != ESP_OK) {
+        free(b->data);
+        free(b);
+    }
 }
 
 /* Set up and start the web server
@@ -760,6 +804,7 @@ void cHttpdServer::stop()
         }
         state._FS = nullptr;
         state.hServer = nullptr;
+        s_server = nullptr;
     }
 }
 

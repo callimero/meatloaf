@@ -27,8 +27,9 @@ bool FileSystemLittleFS::is_dir(const char *path)
 {
     char * fpath = _make_fullpath(path);
     struct stat info;
-    stat( fpath, &info);
-    return (info.st_mode == S_IFDIR) ? true: false;
+    bool result = (stat(fpath, &info) == 0) && S_ISDIR(info.st_mode);
+    free(fpath);
+    return result;
 }
 
 bool FileSystemLittleFS::dir_open(const char * path, const char * pattern, uint16_t diropts)
