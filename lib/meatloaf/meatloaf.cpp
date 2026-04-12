@@ -139,49 +139,40 @@
 
 CacheOptions parse_cache_fragment(const std::string& url) {
     CacheOptions flags;
-    auto parser = PeoplesUrlParser::parseURL(url);
-    if (!parser || parser->fragment.empty()) {
+    // Fast path: '#' is required for any fragment — skip full URL parse if absent.
+    if (url.find('#') == std::string::npos)
         return flags;
-    }
+
+    auto parser = PeoplesUrlParser::parseURL(url);
+    if (!parser || parser->fragment.empty())
+        return flags;
 
     std::string cacheValue = parser->fragmentValue("cache");
     if (!cacheValue.empty()) {
         cacheValue = util_tolower(cacheValue);
-        if (cacheValue == "ram") {
+        if (cacheValue == "ram")
             flags.store = CACHE_RAM;
-        } else if (cacheValue == "sd") {
+        else if (cacheValue == "sd")
             flags.store = CACHE_SD;
-        }
     }
 
-    std::string refreshValue = parser->fragmentValue("refresh");
-    if (!refreshValue.empty()) {
-        if (util_string_value_is_true(refreshValue)) {
-            flags.force_refresh = true;
-        }
-    }
-
-    std::string forceValue = parser->fragmentValue("force");
-    if (!forceValue.empty()) {
-        if (util_string_value_is_true(forceValue)) {
-            flags.force_refresh = true;
-        }
-    }
+    if (util_string_value_is_true(parser->fragmentValue("refresh")) ||
+        util_string_value_is_true(parser->fragmentValue("force")))
+        flags.force_refresh = true;
 
     return flags;
 }
 
 std::string strip_cache_fragment_from_url(const std::string& url) {
     Debug_printv("url[%s]", url.c_str());
-    CacheOptions flags = parse_cache_fragment(url);
-    if (flags.store == CACHE_NONE) {
+    // Fast path: no '#' means no fragment to strip.
+    if (url.find('#') == std::string::npos)
         return url;
-    }
 
+    // Parse once — check for cache key before allocating a copy.
     auto parser = PeoplesUrlParser::parseURL(url);
-    if (!parser) {
+    if (!parser || parser->fragmentValue("cache").empty())
         return url;
-    }
 
     parser->fragment.clear();
     parser->fragment.shrink_to_fit();
@@ -538,14 +529,12 @@ std::string MFSOwner::existsLocal( std::string path )
             // Debug_printv( "pathToFile[%s] basename[%s]", p.c_str(), name.c_str() );
             if ((dir = opendir ( p.c_str() )) != NULL)
             {
-                /* print all the files and directories within directory */
-                std::string e;
                 while ((ent = readdir (dir)) != NULL) {
                     // Debug_printv( "%s\r\n", ent->d_name );
-                    e = ent->d_name;
-                    if ( mstr::compare( e, name ) )
+                    if ( mstr::compare( ent->d_name, name ) )
                     {
-                        path = ( p + "/" + e );
+                        path.reserve(p.size() + 1 + strlen(ent->d_name));
+                        path = p; path += '/'; path += ent->d_name;
                         break;
                     }
                 }
@@ -707,18 +696,18 @@ std::shared_ptr<MStream> MFile::openStreamWithCache(
     // ---- SD cache ------------------------------------------------------------
     if (mode == std::ios_base::in && cacheFlags.store == CACHE_SD) {
         std::string cacheRoot = CACHE_DIR;
-        if ( !host.empty() ) cacheRoot += "/" + host;
-        std::string hashDir = mstr::crc32(requestUrl);
-        std::string cacheDir = cacheRoot + "/" + hashDir;
-        fnSDFAT.create_path( cacheDir.c_str() );  // Ensure the directory exists
-        cacheDir = "/sd" + cacheDir; // Adjust for SD card mount point
-
-        // Set cache path to destination file.
+        if (!host.empty()) { cacheRoot += '/'; cacheRoot += host; }
+        std::string cacheDir;
+        cacheDir.reserve(cacheRoot.size() + 1 + 8);
+        cacheDir = cacheRoot; cacheDir += '/'; cacheDir += mstr::crc32(requestUrl);
+        fnSDFAT.create_path(cacheDir.c_str());  // Ensure the directory exists
+        std::string cachePath;
+        cachePath.reserve(4 + cacheDir.size() + 1 + 64);
+        cachePath = "/sd"; cachePath += cacheDir; cachePath += '/';
         size_t _lastSlash = requestUrl.find_last_of('/');
-        std::string _cacheFilename = (_lastSlash != std::string::npos)
+        cachePath += (_lastSlash != std::string::npos)
             ? requestUrl.substr(_lastSlash + 1)
             : name;
-        std::string cachePath = cacheDir + "/" + _cacheFilename;
 
         ::PeoplesUrlParser::dump(); // Show url parts
         Debug_printv("url[%s] root[%s] dir[%s] path[%s]", url.c_str(), cacheRoot.c_str(), cacheDir.c_str(), cachePath.c_str());
@@ -998,8 +987,7 @@ MFile* MFile::cdParent(std::string plus)
             lastSlash = path.find_last_of('/', path.size() - 2);
         }
         std::string newDir = mstr::dropLast(path, path.size() - lastSlash);
-        if( plus.size() )
-            newDir += "/" + plus;
+        if (!plus.empty()) { newDir += '/'; newDir += plus; }
 
         path = newDir;
         rebuildUrl();
@@ -1023,8 +1011,7 @@ MFile* MFile::cdLocalParent(std::string plus)
     if(parent.length()-sourceFile->path.length()>1)
         parent = sourceFile->path;
 
-    if(!plus.empty())
-        parent += "/" + plus;
+    if (!plus.empty()) { parent += '/'; parent += plus; }
 
     path = parent;
     rebuildUrl();
@@ -1035,8 +1022,7 @@ MFile* MFile::cdLocalParent(std::string plus)
 MFile* MFile::cdRoot(std::string plus) 
 {
     Debug_printv("url[%s] path[%s] plus[%s]", url.c_str(), path.c_str(), plus.c_str());
-    if ( plus[0] != '/' )
-        plus = "/" + plus;
+    if (plus.empty() || plus[0] != '/') { plus.insert(plus.begin(), '/'); }
 
     return MFSOwner::File( plus, true );
 };
@@ -1051,8 +1037,7 @@ MFile* MFile::cdLocalRoot(std::string plus)
     } else {
         path = sourceFile->path;
     }
-    if ( plus.size() )
-        path += "/" + plus;
+    if (!plus.empty()) { path += '/'; path += plus; }
 
     rebuildUrl();
     Debug_printv("url[%s]", url.c_str());
