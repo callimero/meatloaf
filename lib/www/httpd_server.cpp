@@ -599,17 +599,13 @@ void cHttpdServer::send_file(httpd_req_t *req, const char *filename)
     {
         while (*filename == '/')
             filename++;
-        fpath += filename;
     }
-    else
-    {
-        fpath = filename;
-    }
+    fpath += filename;
 
     // Retrieve server state
     serverstate *pState = (serverstate *)httpd_get_global_user_ctx(req->handle);
 
-    Debug_printv("is_dir[%d] fpath[%s]", pState->_FS->is_dir(fpath.c_str()), fpath.c_str());
+    //Debug_printv("is_dir[%d] fpath[%s]", pState->_FS->is_dir(fpath.c_str()), fpath.c_str());
 
     // If filename is a directory, look for index.html within it
     if (fpath.back() == '/')
