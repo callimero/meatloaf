@@ -372,8 +372,11 @@ MFile* NFSMFile::getNextFileInDir()
     }
 
     if (!ent_name.empty()) {
-        auto file = new NFSMFile(url + "/" + ent_name);
-        file->extension = " " + file->extension;
+        std::string entryUrl;
+        entryUrl.reserve(url.size() + 1 + ent_name.size());
+        entryUrl = url; entryUrl += '/'; entryUrl += ent_name;
+        auto file = new NFSMFile(entryUrl);
+        file->extension.insert(0, 1, ' ');
 
         // Set size and type information
         file->is_dir = S_ISDIR(ent_mode);

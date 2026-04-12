@@ -324,8 +324,11 @@ MFile* SMBMFile::getNextFileInDir()
 
         //Debug_printv("url[%s] entry[%s] index[%d]", mRawUrl.c_str(), ent_name.c_str(), entry_index);
 
-        auto file = new SMBMFile(url + "/" + ent_name);
-        file->extension = " " + file->extension;
+        std::string entryUrl;
+        entryUrl.reserve(url.size() + 1 + ent_name.size());
+        entryUrl = url; entryUrl += '/'; entryUrl += ent_name;
+        auto file = new SMBMFile(entryUrl);
+        file->extension.insert(0, 1, ' ');
 
         // Set size and type information
         if (ent_type == SMB2_TYPE_DIRECTORY) {

@@ -22,10 +22,17 @@
 #include <sstream>
 #include <iomanip>
 
+#include <esp_heap_caps.h>
+
 #include "meatloaf.h"
 #include "../../../include/debug.h"
 #include "peoples_url_parser.h"
 #include "string_utils.h"
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 
 /********************************************************
@@ -240,7 +247,7 @@ MFile* FlashMFile::getNextFileInDir()
         std::string entry_name = this->path + ((this->path == "/") ? "" : "/") + std::string(dirent->d_name);
 
         auto file = new FlashMFile(entry_name);
-        file->extension = " " + file->extension;
+        file->extension.insert(0, 1, ' ');
 
         if(file->isDirectory()) {
             file->size = 0;
@@ -452,10 +459,10 @@ void FlashHandle::obtain(std::string m_path, std::string mode) {
         // For file creation, silently make subdirs as needed.  If any fail,
         // it will be caught by the real file open later on
 
-        char *pathStr = new char[m_path.length()];
-        strncpy(pathStr, m_path.data(), m_path.length());
-
+        char *pathStr = (char*)psram_malloc(m_path.length() + 1);
         if (pathStr) {
+            strncpy(pathStr, m_path.data(), m_path.length());
+            pathStr[m_path.length()] = '\0';
             // Make dirs up to the final fnamepart
             char *ptr = strchr(pathStr, '/');
             while (ptr) {
@@ -464,8 +471,8 @@ void FlashHandle::obtain(std::string m_path, std::string mode) {
                 *ptr = '/';
                 ptr = strchr(ptr+1, '/');
             }
+            free(pathStr);
         }
-        delete[] pathStr;
     }
 
     //Debug_printv("m_path[%s] mode[%s]", m_path.c_str(), mode.c_str());

@@ -24,6 +24,13 @@
 #include <cstdio>
 #include <cerrno>
 
+#include <esp_heap_caps.h>
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
+
 // Initialize static members — SessionBroker
 std::unordered_map<std::string, std::shared_ptr<MSession>> SessionBroker::session_repo;
 std::chrono::steady_clock::time_point SessionBroker::last_keep_alive_check = std::chrono::steady_clock::now();
@@ -183,7 +190,7 @@ bool MSession::CachedFile::allocate() {
 
 heap_alloc:
 #endif
-    m_data = (uint8_t*)malloc(size);
+    m_data = (uint8_t*)psram_malloc(size);
     if (!m_data) {
         Debug_printv("Failed to allocate %u bytes on heap", size);
         return false;
@@ -295,13 +302,15 @@ bool MSession::CachedFile::loadFromStream(MStream* stream, uint32_t fileSize) {
             Debug_printv("Failed to open SD cache file for writing: %s", m_sdPath.c_str());
             return false;
         }
-        uint8_t buf[1024];
+        const uint32_t kBufSize = 1024;
+        uint8_t* buf = (uint8_t*)psram_malloc(kBufSize);
+        if (!buf) { fclose(f); return false; }
         uint32_t total = 0;
         uint32_t remaining = fileSize;
         while (true) {
             uint32_t toRead = (remaining > 0)
-                ? std::min(remaining, (uint32_t)sizeof(buf))
-                : (uint32_t)sizeof(buf);
+                ? std::min(remaining, kBufSize)
+                : kBufSize;
             uint32_t r = stream->read(buf, toRead);
             if (r == 0) break;
             fwrite(buf, 1, r, f);
@@ -311,6 +320,7 @@ bool MSession::CachedFile::loadFromStream(MStream* stream, uint32_t fileSize) {
                 if (remaining == 0) break;
             }
         }
+        free(buf);
         fclose(f);
         size = total;
         Debug_printv("Cached %u bytes to SD: %s", total, m_sdPath.c_str());
@@ -319,12 +329,15 @@ bool MSession::CachedFile::loadFromStream(MStream* stream, uint32_t fileSize) {
     // RAM path: if fileSize is unknown (0), buffer into a vector first
     if (fileSize == 0) {
         std::vector<uint8_t> buf;
-        uint8_t tmp[1024];
+        const uint32_t kTmpSize = 1024;
+        uint8_t* tmp = (uint8_t*)psram_malloc(kTmpSize);
+        if (!tmp) return false;
         while (true) {
-            uint32_t r = stream->read(tmp, sizeof(tmp));
+            uint32_t r = stream->read(tmp, kTmpSize);
             if (r == 0) break;
             buf.insert(buf.end(), tmp, tmp + r);
         }
+        free(tmp);
         if (buf.empty()) return false;
         size = (uint32_t)buf.size();
         if (!allocate()) return false;

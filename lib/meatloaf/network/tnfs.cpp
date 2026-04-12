@@ -404,7 +404,7 @@ MFile* TNFSMFile::getNextFileInDir() {
     fullPath += entry_name;
 
     auto file = new TNFSMFile(fullPath);
-    file->extension = " " + file->extension;
+    file->extension.insert(0, 1, ' ');
     file->size = filestat.isDir ? 0 : filestat.filesize;
 
     entry_index++;

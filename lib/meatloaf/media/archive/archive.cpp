@@ -22,7 +22,14 @@
 #include <archive_entry.h>
 #include <string.h>
 
+#include <esp_heap_caps.h>
+
 #include "meatloaf.h"
+
+static inline void *psram_malloc(size_t sz) {
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 // // HIMEM is only available on original ESP32 with SPIRAM (not S2, S3, C3, etc.)
 // #if defined(CONFIG_IDF_TARGET_ESP32) && defined(CONFIG_SPIRAM)
@@ -153,7 +160,7 @@ bool Archive::open(std::ios_base::openmode mode, bool rawOnly) {
 
     Debug_printv("Archive::open [%s] rawOnly[%d]", m_srcStream->url.c_str(), rawOnly);
 
-    m_srcBuffer = new uint8_t[m_buffSize];
+    m_srcBuffer = (uint8_t*)psram_malloc(m_buffSize);
     m_archive = archive_read_new();
     Debug_printv("pre-seek pos[%lu]", (unsigned long)m_srcStream->position());
     bool seekOk = m_srcStream->seek(0, SEEK_SET);
@@ -213,7 +220,7 @@ void Archive::close() {
         m_archive = NULL;
     }
     if (m_srcBuffer != nullptr) {
-        delete[] m_srcBuffer;
+        free(m_srcBuffer);
         m_srcBuffer = nullptr;
     }
     m_hasCompressionFilter = false;
@@ -756,7 +763,10 @@ MFile *ArchiveMFile::getNextFileInDir()
         std::string filename = image->entry.filename;
         Debug_printv("Found entry: filename=[%s] size=%lu", filename.c_str(), image->entry.size);
 
-        auto file = MFSOwner::File(sourceFile->url + "/" + filename);
+        std::string entryUrl;
+        entryUrl.reserve(sourceFile->url.size() + 1 + filename.size());
+        entryUrl = sourceFile->url; entryUrl += '/'; entryUrl += filename;
+        auto file = MFSOwner::File(entryUrl);
         file->name = filename;  // Use actual entry name, not container image name
         file->size = image->entry.size;
 
