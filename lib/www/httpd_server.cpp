@@ -31,6 +31,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 //#include "esp_log.h"
 #include <esp_http_server.h>
 #include <esp_log.h>
@@ -38,6 +39,14 @@
 #include <sys/socket.h>
 //#include <cstdlib>
 #include <sstream>
+
+// Prefer PSRAM for large I/O buffers to keep internal RAM free.
+// Falls back to internal heap if PSRAM is unavailable or exhausted.
+static inline void *psram_malloc(size_t sz)
+{
+    void *p = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(sz);
+}
 
 // WebDAV
 #include "webdav/webdav_server.h"
@@ -517,48 +526,31 @@ httpd_handle_t cHttpdServer::start_server(serverstate &state)
 
 const char *cHttpdServer::find_mimetype_str(const char *extension)
 {
-    static std::map<std::string, std::string> mime_map
-    {
-        {"html", HTTPD_TYPE_TEXT},
-        {"htm", HTTPD_TYPE_TEXT},
-
-        {"css", "text/css"},
-        {"txt", "text/plain"},
-        {"js",  "text/javascript"},
-        {"xml", "text/xml"},
-
-        {"gif", "image/gif"},
-        {"ico", "image/x-icon"},
-        {"jpg", "image/jpeg"},
-        {"png", "image/png"},
-        {"svg", "image/svg+xml"},
-
-        // {"ttf", "application/x-font-ttf"},
-        // {"otf", "application/x-font-opentype"},
-        // {"woff", "application/font-woff"},
-        // {"woff2", "application/font-woff2"},
-        // {"eot", "application/vnd.ms-fontobject"},
-        // {"sfnt", "application/font-sfnt"},
-
-        // {"atascii", HTTPD_TYPE_OCTET},
-        // {"bin", HTTPD_TYPE_OCTET},
-        {"json", HTTPD_TYPE_JSON},
-        {"pdf", "application/pdf"},
-
-        // {"zip", "application/zip"},
-        {"gz", "application/x-gzip"}
-        // {"appcache", "text/cache-manifest"}
+    // Plain array in flash — no heap allocation, no map-node overhead.
+    static const struct { const char *ext; const char *mime; } mime_table[] = {
+        { "html", HTTPD_TYPE_TEXT       },
+        { "htm",  HTTPD_TYPE_TEXT       },
+        { "css",  "text/css"            },
+        { "txt",  "text/plain"          },
+        { "js",   "text/javascript"     },
+        { "xml",  "text/xml"            },
+        { "gif",  "image/gif"           },
+        { "ico",  "image/x-icon"        },
+        { "jpg",  "image/jpeg"          },
+        { "png",  "image/png"           },
+        { "svg",  "image/svg+xml"       },
+        { "json", HTTPD_TYPE_JSON       },
+        { "pdf",  "application/pdf"     },
+        { "gz",   "application/x-gzip" },
     };
-
-    //Debug_printv("extension[%s]", extension);
 
     if (extension != NULL)
     {
-        std::map<std::string, std::string>::iterator mmatch;
-
-        mmatch = mime_map.find(extension);
-        if (mmatch != mime_map.end())
-            return mmatch->second.c_str();
+        for (size_t i = 0; i < sizeof(mime_table) / sizeof(mime_table[0]); i++)
+        {
+            if (strcmp(extension, mime_table[i].ext) == 0)
+                return mime_table[i].mime;
+        }
     }
     return HTTPD_TYPE_OCTET;
 }
@@ -636,8 +628,8 @@ void cHttpdServer::send_file(httpd_req_t *req, const char *filename)
         snprintf(hdrval, 10, "%ld", FileSystem::filesize(file));
         httpd_resp_set_hdr(req, "Content-Length", hdrval);
 
-        // Send the file content out in chunks
-        char *buf = (char *)malloc(http_SEND_BUFF_SIZE);
+        // Send the file content out in chunks (buffer in PSRAM to spare internal RAM)
+        char *buf = (char *)psram_malloc(http_SEND_BUFF_SIZE);
         if (buf == nullptr)
         {
             fclose(file);
@@ -678,15 +670,23 @@ void cHttpdServer::send_file_parsed(httpd_req_t *req, const char *filename)
 
     set_file_content_type(req, filename);
 
-    // `pending` holds bytes that haven't been sent yet — at most one read buffer's
-    // worth plus the length of any tag that crosses a chunk boundary (typically < 50 bytes).
+    // Read buffer in PSRAM to keep internal RAM free.
+    // `pending` holds bytes around tag boundaries — stays small (< http_SEND_BUFF_SIZE + ~50 bytes).
+    char *buf = (char *)psram_malloc(http_SEND_BUFF_SIZE);
+    if (buf == nullptr)
+    {
+        fclose(file);
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Error 500", 9);
+        return;
+    }
+
     std::string pending;
-    char buf[http_SEND_BUFF_SIZE];
     bool done = false;
 
     while (!done)
     {
-        size_t count = fread(buf, 1, sizeof(buf), file);
+        size_t count = fread(buf, 1, http_SEND_BUFF_SIZE, file);
         if (count > 0)
             pending.append(buf, count);
         else
@@ -753,6 +753,7 @@ void cHttpdServer::send_file_parsed(httpd_req_t *req, const char *filename)
         pending.erase(0, pos);
     }
 
+    free(buf);
     httpd_resp_send_chunk(req, nullptr, 0); // terminate chunked response
     fclose(file);
 }
@@ -771,7 +772,7 @@ void cHttpdServer::send_http_error(httpd_req_t *req, int errnum)
     if (file != nullptr)
     {
         set_file_content_type(req, error_path.c_str());
-        char *buf = (char *)malloc(http_SEND_BUFF_SIZE);
+        char *buf = (char *)psram_malloc(http_SEND_BUFF_SIZE);
         if (buf != nullptr)
         {
             size_t count = 0;
@@ -802,7 +803,7 @@ void cHttpdServer::websocket_send_all(const char* data, size_t len)
     if (!b) return;
 
     b->hd   = s_server;
-    b->data = (uint8_t*)malloc(len);
+    b->data = (uint8_t*)psram_malloc(len);
     if (!b->data) { free(b); return; }
 
     memcpy(b->data, data, len);
