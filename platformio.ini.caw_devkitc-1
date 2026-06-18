@@ -71,7 +71,7 @@ flash_filesystem = FLASH_LITTLEFS
 
 ; Set default WiFi credentials
 wifi_ssid = "SSID"
-wifi_pass = "PASSA"
+wifi_pass = "PASSB"
 
 ; Required flags, leave as is
 build_platform = BUILD_IEC
