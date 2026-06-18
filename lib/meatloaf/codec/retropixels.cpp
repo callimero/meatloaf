@@ -16,6 +16,7 @@
 // along with Meatloaf. If not, see <http://www.gnu.org/licenses/>.
 
 #include "retropixels.h"
+#include <cstring> 
 
 // Include MFileSystem owner for creating files from URLs
 #include "meatloaf.h"
