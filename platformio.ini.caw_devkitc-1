@@ -70,8 +70,8 @@ flash_size = 8m
 flash_filesystem = FLASH_LITTLEFS
 
 ; Set default WiFi credentials
-wifi_ssid = "UnserFritzi"
-wifi_pass = "UNsssudikS"
+wifi_ssid = "SSID"
+wifi_pass = "xxxxxxxxxxx"
 
 ; Required flags, leave as is
 build_platform = BUILD_IEC
