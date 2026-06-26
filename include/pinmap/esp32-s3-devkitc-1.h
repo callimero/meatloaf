@@ -74,8 +74,8 @@
 
 
 /* Modem/Parallel Switch */
-#define PIN_MODEM_ENABLE        GPIO_NUM_2  // High = Modem enabled
-#define PIN_MODEM_UP9600        GPIO_NUM_15 // High = UP9600 enabled
+#define PIN_MODEM_ENABLE        GPIO_NUM_NC  // High = Modem enabled
+#define PIN_MODEM_UP9600        GPIO_NUM_NC // High = UP9600 enabled
 
 #endif // PINMAP_ESP32S3_DEVKITC_1
 #endif // ESP32S3_DEVKITC_1_H
